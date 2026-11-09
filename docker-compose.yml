@@ -1,0 +1,23 @@
+# Local Print Factory - works as-is with `docker compose up -d` and with Coolify ("Docker Compose" build pack).
+services:
+  local-print-factory:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${LPF_PORT:-8800}:8800"        # the web UI: http://<server-ip>:8800
+    volumes:
+      - lpf-data:/data                  # database, uploaded files, thumbnails, hot folder - back this up
+    environment:
+      - SERVICE_FQDN_LOCALPRINTFACTORY_8800   # Coolify only: routes the domain you assign to port 8800
+      - LF_PASSWORD=${LF_PASSWORD:-}          # set this! Anyone who can open the UI can control your printers
+      - LF_POLL_INTERVAL=${LF_POLL_INTERVAL:-3}
+      - TZ=${TZ:-UTC}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8800/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  lpf-data:

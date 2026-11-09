@@ -1,0 +1,9 @@
+.git
+.venv
+data
+docs
+tests
+simulator
+**/__pycache__
+*.pyc
+.pytest_cache

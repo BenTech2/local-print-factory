@@ -1,0 +1,18 @@
+# Alternative for a plain Docker host on the same LAN as the printers:
+#   docker compose -f docker-compose.lan.yml up -d
+# Host networking lets "Find printers" (mDNS / UDP broadcast) discover printers automatically.
+# Not for Coolify: its proxy needs the default bridge network (use docker-compose.yml there).
+services:
+  local-print-factory:
+    build: .
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - lpf-data:/data
+    environment:
+      - LF_PASSWORD=${LF_PASSWORD:-}
+      - LF_POLL_INTERVAL=${LF_POLL_INTERVAL:-3}
+      - TZ=${TZ:-UTC}
+
+volumes:
+  lpf-data:
