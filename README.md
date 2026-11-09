@@ -17,9 +17,11 @@ server. It talks to each printer directly, so nothing goes through the cloud.
 | **Safety checks** | A file sliced for one model is never sent to another. It warns about mismatched materials or cores, and can block those jobs instead |
 | **Control** | Pause, resume, abort and camera on every printer. Ultimakers also get the light colour, an on-screen message and *identify* (blink the lights) |
 | **Library** | `.ufp`, `.gcode` and `.gcode.gz` files from Cura, OrcaSlicer and ElegooSlicer, with thumbnails, print time and target printer |
+| **Folders** | Keep projects apart with nested folders. Drag files between folders or use *Move*, search across every folder, and queue a whole project in one go |
+| **Works on your phone** | A phone layout with a bottom tab bar. Add it to your home screen and it opens like an app |
 | **History** | Every job with its result and a *print again* button, an event log, and each printer's own print history |
 | **Notifications** | A webhook fires when a print finishes, fails or pauses, when a printer needs attention, or when one goes offline. Works with ntfy.sh, Discord, Slack and Home Assistant |
-| **Hot folder** | Files saved into the hot folder are imported automatically, and can be queued automatically too |
+| **Hot folder** | Files saved into the hot folder are imported automatically, and can be queued automatically too. Sub-folders become Library folders |
 | **API** | Everything the UI does goes through a JSON API under `/api`, with interactive docs at `/docs` |
 
 ## Supported printers

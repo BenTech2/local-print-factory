@@ -302,12 +302,13 @@ async def _send(p, d: Driver, job, f):
 
 
 # ---------------------------------------------------------------- library
-def add_file(filename: str, data: bytes) -> int:
+def add_file(filename: str, data: bytes, folder_id: int | None = None) -> int:
     meta, thumb = extract_metadata(filename, data)
     stored = f"{uuidlib.uuid4().hex}_{filename}"
     (FILES_DIR / stored).write_bytes(data)
-    fid = db.ex("INSERT INTO files(filename, stored_name, size, meta, has_thumb, uploaded_at) VALUES(?,?,?,?,?,?)",
-                (filename, stored, len(data), json.dumps(meta), 1 if thumb else 0, time.time()))
+    fid = db.ex("INSERT INTO files(filename, stored_name, size, meta, has_thumb, folder_id, uploaded_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (filename, stored, len(data), json.dumps(meta), 1 if thumb else 0, folder_id, time.time()))
     if thumb:
         (THUMBS_DIR / f"{fid}.png").write_bytes(thumb)
     return fid
@@ -325,20 +326,36 @@ def queue_file(fid: int, copies=1, target_printer_id=None, name=None):
     return ids
 
 
+def folder_for_path(parts) -> int | None:
+    """Find or create the Library folder for a path like ('Project A', 'Plates'). Names match case-insensitively."""
+    parent = None
+    for name in parts:
+        name = name.strip()[:100]
+        if not name:
+            continue
+        row = db.one("SELECT id FROM folders WHERE name=? COLLATE NOCASE AND parent_id IS ?", (name, parent))
+        parent = row["id"] if row else db.ex("INSERT INTO folders(name, parent_id, created_at) VALUES(?,?,?)",
+                                             (name, parent, time.time()))
+    return parent
+
+
 def scan_hotfolder():
+    """Import print files saved into the hot folder. Sub-folders become Library folders."""
     imported = []
-    for path in sorted(HOTFOLDER_DIR.iterdir()):
-        if not path.is_file() or not allowed(path.name):
+    for path in sorted(HOTFOLDER_DIR.rglob("*")):
+        rel = path.relative_to(HOTFOLDER_DIR)
+        if not path.is_file() or not allowed(path.name) or rel.parts[0] == "imported" \
+                or any(part.startswith(".") for part in rel.parts):
             continue
         if time.time() - path.stat().st_mtime < 3:  # still being written
             continue
-        fid = add_file(path.name, path.read_bytes())
+        fid = add_file(path.name, path.read_bytes(), folder_for_path(rel.parts[:-1]))
         done = HOTFOLDER_DIR / "imported"
         done.mkdir(exist_ok=True)
         shutil.move(str(path), str(done / f"{int(time.time())}_{path.name}"))
         if db.get_settings().get("hotfolder_autoqueue") == "1":
             queue_file(fid)
-        imported.append(path.name)
+        imported.append(str(rel))
     return imported
 
 

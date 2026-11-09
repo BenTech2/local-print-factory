@@ -31,6 +31,12 @@ CREATE TABLE IF NOT EXISTS files (
     has_thumb INTEGER NOT NULL DEFAULT 0,
     uploaded_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS folders (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    parent_id INTEGER,
+    created_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY,
     file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
@@ -62,6 +68,7 @@ MIGRATIONS = [
     ("printers", "model", "TEXT"),
     ("printers", "clear_pending", "TEXT"),   # JSON of the finished job waiting for "plate is clear"
     ("printers", "cleared_key", "TEXT"),     # last finished job the user confirmed as cleared
+    ("files", "folder_id", "INTEGER"),       # Library folder; NULL = top level
 ]
 
 with _lock:

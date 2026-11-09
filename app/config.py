@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 DATA_DIR = Path(os.environ.get("LF_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))
 FILES_DIR = DATA_DIR / "files"

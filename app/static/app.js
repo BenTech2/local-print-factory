@@ -417,34 +417,106 @@ function printerOptions(sel) {
 $("#queue-upload").onchange = (e) => uploadFiles(e.target.files, true);
 
 // ---------------------------------------------------------------- library
-let LIB = [];
+let LIB = [], FOLDERS = [];
+let CUR = null;                                   // open folder id, null = top level
+try { CUR = Number(sessionStorage.getItem("lpf.folder")) || null; } catch (e) { /* private mode */ }
+const folderById = (id) => FOLDERS.find((f) => f.id === id);
+function folderPath(id) { const out = []; let f = folderById(id); while (f) { out.unshift(f); f = folderById(f.parent_id); } return out; }
+const pathText = (id) => folderPath(id).map((f) => f.name).join(" / ");
+function subtree(id) {                            // the folder and everything inside it
+  const ids = new Set([id]); let grew = true;
+  while (grew) { grew = false; FOLDERS.forEach((f) => { if (ids.has(f.parent_id) && !ids.has(f.id)) { ids.add(f.id); grew = true; } }); }
+  return ids;
+}
+const filesIn = (id, deep) => { const ids = deep ? subtree(id) : new Set([id]); return LIB.filter((x) => ids.has(x.folder_id ?? null)); };
+function openFolder(id) {
+  CUR = id ?? null;
+  try { sessionStorage.setItem("lpf.folder", CUR || ""); } catch (e) { /* ignore */ }
+  $("#lib-search").value = ""; renderLibrary();
+}
 async function loadLibrary() {
-  try { LIB = await api("/api/files"); } catch (e) { return toast(e.message, true); }
+  try { [LIB, FOLDERS] = await Promise.all([api("/api/files"), api("/api/folders")]); } catch (e) { return toast(e.message, true); }
+  if (CUR && !folderById(CUR)) CUR = null;
   renderLibrary();
 }
+function folderOptions(selected, exclude) {      // indented <option>s for every folder, minus a subtree
+  const skip = exclude ? subtree(exclude) : new Set();
+  const out = [`<option value="">All files (top level)</option>`];
+  const walk = (parent, depth) => FOLDERS.filter((f) => (f.parent_id ?? null) === parent && !skip.has(f.id)).forEach((f) => {
+    out.push(`<option value="${f.id}" ${f.id === selected ? "selected" : ""}>${"   ".repeat(depth)}${esc(f.name)}</option>`);
+    walk(f.id, depth + 1);
+  });
+  walk(null, 0);
+  return out.join("");
+}
+function fileCard(f, showPath) {
+  const m = f.meta || {};
+  const exs = Object.entries(m.extruders || {}).filter(([, e]) => e.material_guid || e.nozzle);
+  return `<div class="panel file" data-id="${f.id}" draggable="true">
+    <div class="thumb">${f.has_thumb ? `<img loading="lazy" src="/api/files/${f.id}/thumb" alt="" draggable="false">` : ic("cube")}</div>
+    <div class="fbody"><div class="fname">${esc(f.filename)}</div>
+      ${showPath && f.folder_id ? `<div class="facts"><span>${ic("folder")}${esc(pathText(f.folder_id))}</span></div>` : ""}
+      <div class="facts"><span>${ic("printer")}${esc(m.machine || "Any printer")}</span>${m.print_time ? `<span>${ic("clock")}${dur(m.print_time)}</span>` : ""}<span>${size(f.size)}</span></div>
+      ${exs.map(([i, e]) => `<div class="mat">${exs.length > 1 ? `${Number(i) + 1}: ` : ""}${e.nozzle ? esc(e.nozzle) + " · " : ""}${matLabel(e.material, e.material_guid)}</div>`).join("")}
+      ${m.warning ? `<div class="callout warn">${ic("alert")}<div class="txt">${esc(m.warning)}</div></div>` : ""}</div>
+    <div class="ffoot"><button class="btn small primary" data-a="queue">${ic("play")}Print</button>
+      <button class="iconbtn" data-a="move" title="Move to folder">${ic("folder-move")}</button>
+      <a class="iconbtn" href="/api/files/${f.id}/download" title="Download" draggable="false">${ic("download")}</a>
+      <button class="iconbtn danger" data-a="delete" title="Delete">${ic("trash")}</button></div></div>`;
+}
+function folderTile(f) {
+  const n = filesIn(f.id, true).length, subs = FOLDERS.filter((x) => x.parent_id === f.id).length;
+  return `<div class="panel folder" data-folder="${f.id}" draggable="true" tabindex="0">
+    <div class="ficon">${ic("folder")}</div>
+    <div class="finfo"><div class="fname">${esc(f.name)}</div>
+      <div class="sub">${n} file${n === 1 ? "" : "s"}${subs ? ` · ${subs} folder${subs === 1 ? "" : "s"}` : ""}</div></div>
+    <button class="iconbtn" data-a="fmenu" title="Folder options">${ic("more")}</button></div>`;
+}
 function renderLibrary() {
-  const s = $("#lib-search").value.toLowerCase();
-  const rows = LIB.filter((f) => !s || f.filename.toLowerCase().includes(s) || ((f.meta || {}).machine || "").toLowerCase().includes(s));
-  if (!rows.length) {
-    setHTML($("#lib-list"), LIB.length ? empty("search", "No matches", "Try a different search.") : empty("library", "No files yet", "Drop sliced files above, or save them into the hot folder."));
+  const s = $("#lib-search").value.trim().toLowerCase();
+  const crumbs = [{ id: null, name: "All files" }, ...folderPath(CUR)];
+  setHTML($("#lib-crumbs"), s ? `<span class="crumb on">Search results</span>` : crumbs.map((c, i) =>
+    `${i ? `<span class="crumbsep">›</span>` : ""}<button class="crumb${i === crumbs.length - 1 ? " on" : ""}" data-folder="${c.id ?? ""}">${i ? "" : ic("library")}${esc(c.name)}</button>`).join("")
+    + (CUR && !s ? `<button class="iconbtn" data-a="fmenu-cur" title="Folder options">${ic("more")}</button>` : ""));
+  let folders, files;
+  if (s) {
+    folders = FOLDERS.filter((f) => f.name.toLowerCase().includes(s));
+    files = LIB.filter((f) => f.filename.toLowerCase().includes(s) || ((f.meta || {}).machine || "").toLowerCase().includes(s)
+      || (f.folder_id && pathText(f.folder_id).toLowerCase().includes(s)));
+  } else {
+    folders = FOLDERS.filter((f) => (f.parent_id ?? null) === CUR);
+    files = LIB.filter((f) => (f.folder_id ?? null) === CUR);
+  }
+  if (!folders.length && !files.length) {
+    setHTML($("#lib-list"), s ? empty("search", "No matches", "Try a different search.")
+      : CUR ? empty("folder", "This folder is empty", "Upload files here, or drag files onto it from another folder.")
+      : empty("library", "No files yet", "Upload sliced files, or save them into the hot folder. Use <b>New folder</b> to keep projects apart."));
     return;
   }
-  setHTML($("#lib-list"), rows.map((f) => {
-    const m = f.meta || {};
-    const exs = Object.entries(m.extruders || {}).filter(([, e]) => e.material_guid || e.nozzle);
-    return `<div class="panel file" data-id="${f.id}">
-      <div class="thumb">${f.has_thumb ? `<img loading="lazy" src="/api/files/${f.id}/thumb" alt="">` : ic("cube")}</div>
-      <div class="fbody"><div class="fname">${esc(f.filename)}</div>
-        <div class="facts"><span>${ic("printer")}${esc(m.machine || "Any printer")}</span>${m.print_time ? `<span>${ic("clock")}${dur(m.print_time)}</span>` : ""}<span>${size(f.size)}</span></div>
-        ${exs.map(([i, e]) => `<div class="mat">${exs.length > 1 ? `${Number(i) + 1}: ` : ""}${e.nozzle ? esc(e.nozzle) + " · " : ""}${matLabel(e.material, e.material_guid)}</div>`).join("")}
-        ${m.warning ? `<div class="callout warn">${ic("alert")}<div class="txt">${esc(m.warning)}</div></div>` : ""}</div>
-      <div class="ffoot"><button class="btn small primary" data-a="queue">${ic("play")}Print</button>
-        <a class="iconbtn" href="/api/files/${f.id}/download" title="Download">${ic("download")}</a>
-        <button class="iconbtn danger" data-a="delete" title="Delete">${ic("trash")}</button></div></div>`;
-  }).join(""));
+  setHTML($("#lib-list"), (folders.length ? `<div class="folders">${folders.map(folderTile).join("")}</div>` : "")
+    + (files.length ? `<div class="lib">${files.map((f) => fileCard(f, !!s)).join("")}</div>` : ""));
 }
 $("#lib-search").oninput = renderLibrary;
+$("#btn-new-folder").onclick = () => {
+  dialog(`<h2>New folder</h2><p class="dsub">Inside ${esc(CUR ? pathText(CUR) : "All files")}</p>
+    <label class="field">Name<input name="name" placeholder="e.g. Customer order 1042" maxlength="100"></label>`,
+    [["Cancel", "close"], ["Create folder", "ok", "primary"]], async (v, f) => {
+      const r = await act(() => api("/api/folders", { method: "POST", json: { name: f.name.value, parent_id: CUR } }));
+      if (!r) return false;
+      await loadLibrary();
+    });
+};
+$("#lib-crumbs").addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-folder]");
+  if (b) return openFolder(Number(b.dataset.folder) || null);
+  if (ev.target.closest("[data-a=fmenu-cur]")) folderMenu(folderById(CUR));
+});
 $("#lib-list").addEventListener("click", async (ev) => {
+  const tile = ev.target.closest(".folder");
+  if (tile) {
+    const f = folderById(Number(tile.dataset.folder));
+    return ev.target.closest("[data-a=fmenu]") ? folderMenu(f) : openFolder(f.id);
+  }
   const b = ev.target.closest("[data-a]"); if (!b) return;
   const id = Number(b.closest(".file").dataset.id);
   const f = LIB.find((x) => x.id === id);
@@ -452,29 +524,102 @@ $("#lib-list").addEventListener("click", async (ev) => {
     if (await confirmDlg(`Delete ${f.filename}?`, "The file is removed from the library. Jobs already queued from it are kept.", "Delete file", true)) { await act(() => api(`/api/files/${id}`, { method: "DELETE" }), "Deleted"); loadLibrary(); }
     return;
   }
+  if (b.dataset.a === "move") {
+    return dialog(`<h2>Move file</h2><p class="dsub">${esc(f.filename)}</p><label class="field">Folder<select name="to">${folderOptions(f.folder_id)}</select></label>`,
+      [["Cancel", "close"], ["Move", "ok", "primary"]], async (v, form) => { await moveFile(id, Number(form.to.value) || null); });
+  }
   let checks = [];
   try { checks = await api(`/api/files/${id}/check`); } catch (e) { /* non-fatal */ }
   const notes = checks.filter((c) => c.blocking.length || c.warnings.length);
   dialog(`<h2>Print file</h2><p class="dsub">${esc(f.filename)}</p>
     <label class="field">Printer<select name="t">${printerOptions(null)}</select></label>
-    <label class="field">Copies<input type="number" name="copies" value="1" min="1" max="100"></label>
+    <label class="field">Copies<input type="number" name="copies" value="1" min="1" max="100" inputmode="numeric"></label>
     ${notes.length ? `<div class="checks">${notes.map((c) => `<div class="callout ${c.blocking.length ? "bad" : "warn"}">${ic("alert")}<div class="txt"><b>${esc(c.name)}${c.blocking.length ? ": won't be sent here" : ""}</b><span class="sub">${esc([...c.blocking, ...c.warnings].join("; "))}</span></div></div>`).join("")}</div>` : ""}`,
     [["Cancel", "close"], ["Add to queue", "q", "primary"]], (v, form) => {
       if (v === "q") act(() => api(`/api/files/${id}/queue`, { method: "POST", json: { copies: Number(form.copies.value), printer_id: Number(form.t.value) || null } }), "Added to queue");
     });
 });
-$("#lib-upload").onchange = (e) => uploadFiles(e.target.files, false);
+async function moveFile(id, to) {
+  await act(() => api(`/api/files/${id}`, { method: "PATCH", json: { folder_id: to } }), `Moved to ${to ? folderById(to).name : "All files"}`);
+  loadLibrary();
+}
+async function moveFolder(id, to) {
+  await act(() => api(`/api/folders/${id}`, { method: "PATCH", json: { parent_id: to } }), `Moved to ${to ? folderById(to).name : "All files"}`);
+  loadLibrary();
+}
+function folderMenu(f) {
+  const direct = filesIn(f.id, false), all = filesIn(f.id, true);
+  dialog(`<h2>${esc(f.name)}</h2><p class="dsub">${esc(pathText(f.id))} · ${all.length} file${all.length === 1 ? "" : "s"}</p>
+    <label class="field">Name<input name="name" value="${esc(f.name)}" maxlength="100"></label>
+    <label class="field">Inside<select name="parent">${folderOptions(f.parent_id, f.id)}</select></label>
+    <div class="dsection"><div class="lbl">Print this project</div>
+      <p class="muted" style="margin:0 0 10px">Adds every file ${all.length > direct.length ? "in this folder and its sub-folders " : "in this folder "}to the queue. Each goes to a printer that matches it.</p>
+      <div class="field"><div class="row"><input type="number" name="copies" value="1" min="1" max="100" inputmode="numeric" style="max-width:90px" aria-label="Copies of each">
+        <button class="btn" value="printall" ${all.length ? "" : "disabled"}>${ic("play")}Queue ${all.length} file${all.length === 1 ? "" : "s"}</button></div><small>Copies of each file</small></div></div>
+    <div class="dsection"><div class="lbl">Remove</div><p class="muted" style="margin:0 0 10px">Deleting a folder keeps its files. They move up one level.</p>
+      <div class="btnrow"><button class="btn small danger" value="delete">${ic("trash")}Delete folder</button></div></div>`,
+    [["Cancel", "close"], ["Save", "save", "primary"]], async (v, form) => {
+      if (v === "save") {
+        const r = await act(() => api(`/api/folders/${f.id}`, { method: "PATCH", json: { name: form.name.value, parent_id: Number(form.parent.value) || null } }), "Folder saved");
+        if (!r) return false;
+        return loadLibrary();
+      }
+      if (v === "printall") {
+        const copies = Math.max(1, Number(form.copies.value) || 1);
+        let n = 0;
+        for (const file of all) {
+          try { await api(`/api/files/${file.id}/queue`, { method: "POST", json: { copies } }); n++; }
+          catch (e) { toast(`${file.filename}: ${e.message}`, true); }
+        }
+        toast(`Queued ${n * copies} job${n * copies === 1 ? "" : "s"} from ${f.name}`); refresh(); return;
+      }
+      if (v === "delete" && await confirmDlg(`Delete the folder ${f.name}?`, "Its files and sub-folders are kept and move up one level.", "Delete folder", true)) {
+        await act(() => api(`/api/folders/${f.id}`, { method: "DELETE" }), "Folder deleted");
+        if (CUR === f.id) CUR = f.parent_id ?? null;
+        loadLibrary();
+      }
+    });
+}
+// Drag files and folders onto a folder tile or a breadcrumb to move them (desktop).
+let dragging = null;
+$("#tab-library").addEventListener("dragstart", (e) => {
+  const el = e.target.closest(".file, .folder"); if (!el) return;
+  dragging = el.classList.contains("file") ? { file: Number(el.dataset.id) } : { folder: Number(el.dataset.folder) };
+  e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", "lpf");
+  el.classList.add("dragging");
+});
+$("#tab-library").addEventListener("dragend", () => { dragging = null; $$(".dragging, .drop").forEach((x) => x.classList.remove("dragging", "drop")); });
+const dropTarget = (e) => {
+  const t = e.target.closest(".folder, .crumb"); if (!t || !dragging) return null;
+  const to = Number(t.dataset.folder) || null;
+  if (dragging.folder && (to === dragging.folder || (to && subtree(dragging.folder).has(to)))) return null;
+  return { el: t, to };
+};
+$("#tab-library").addEventListener("dragover", (e) => {
+  const d = dropTarget(e);
+  $$(".drop").forEach((x) => { if (!d || x !== d.el) x.classList.remove("drop"); });
+  if (d) { e.preventDefault(); d.el.classList.add("drop"); }
+});
+$("#tab-library").addEventListener("drop", (e) => {
+  const d = dropTarget(e); if (!d) return;
+  e.preventDefault(); e.stopPropagation();
+  const what = dragging; dragging = null;
+  if (what.file) moveFile(what.file, d.to); else moveFolder(what.folder, d.to);
+});
+$("#lib-upload").onchange = (e) => uploadFiles(e.target.files, false, CUR);
 const dz = $("#dropzone");
-["dragenter", "dragover"].forEach((t) => dz.addEventListener(t, (e) => { e.preventDefault(); dz.classList.add("over"); }));
+const osFiles = (e) => [...(e.dataTransfer.types || [])].includes("Files");
+["dragenter", "dragover"].forEach((t) => dz.addEventListener(t, (e) => { if (!osFiles(e)) return; e.preventDefault(); dz.classList.add("over"); }));
 ["dragleave", "drop"].forEach((t) => dz.addEventListener(t, (e) => { e.preventDefault(); dz.classList.remove("over"); }));
-dz.addEventListener("drop", (e) => uploadFiles(e.dataTransfer.files, false));
-async function uploadFiles(files, queue) {
+dz.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files, false, CUR); });
+async function uploadFiles(files, queue, folder = null) {
   if (!files || !files.length) return;
   const fd = new FormData();
   [...files].forEach((f) => fd.append("files", f));
   fd.append("queue", queue ? "1" : "0");
+  if (folder) fd.append("folder_id", folder);
   toast(`Uploading ${files.length} file${files.length > 1 ? "s" : ""}…`);
-  await act(() => api("/api/files", { method: "POST", body: fd }), queue ? "Uploaded and queued" : "Uploaded");
+  await act(() => api("/api/files", { method: "POST", body: fd }), queue ? "Uploaded and queued" : folder ? `Uploaded to ${folderById(folder).name}` : "Uploaded");
   $("#lib-upload").value = ""; $("#queue-upload").value = "";
   if (currentTab === "library") loadLibrary();
 }
@@ -576,10 +721,10 @@ function showLogin() {
 async function refresh() {
   try {
     STATE = await api("/api/state");
-    $("#conn").classList.remove("down"); $("#conn-text").textContent = "Connected";
+    $("#conn").classList.remove("down"); $("#conn-text").textContent = "Connected"; $("#offline").hidden = true;
     $("#ver").textContent = "Version " + STATE.version;
     renderPrinters(); renderQueue();
-  } catch (e) { $("#conn").classList.add("down"); $("#conn-text").textContent = "Server unreachable"; }
+  } catch (e) { $("#conn").classList.add("down"); $("#conn-text").textContent = "Server unreachable"; if (e.message !== "Login required") $("#offline").hidden = false; }
 }
 (async function loop() { await refresh(); setTimeout(loop, 2000); })();
 const initial = location.hash.slice(1);

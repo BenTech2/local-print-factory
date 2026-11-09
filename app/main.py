@@ -345,13 +345,16 @@ def list_files():
 
 @app.post("/api/files")
 async def upload_files(files: list[UploadFile] = File(...), queue: int = Form(0),
-                       copies: int = Form(1), printer_id: int | None = Form(None)):
+                       copies: int = Form(1), printer_id: int | None = Form(None),
+                       folder_id: int | None = Form(None)):
+    if folder_id:
+        _folder(folder_id)
     out = []
     for up in files:
         if not allowed(up.filename or ""):
             raise HTTPException(400, f"{up.filename}: only .ufp, .gcode and .gcode.gz files are accepted")
         data = await up.read()
-        fid = await asyncio.to_thread(fleet.add_file, Path(up.filename).name, data)
+        fid = await asyncio.to_thread(fleet.add_file, Path(up.filename).name, data, folder_id or None)
         if queue:
             fleet.queue_file(fid, copies, printer_id or None)
         out.append(db.file_row(fid))
@@ -363,6 +366,92 @@ def _file(fid):
     if not f:
         raise HTTPException(404, "File not found")
     return f
+
+
+@app.patch("/api/files/{fid}")
+def edit_file(fid: int, body: dict = Body(...)):
+    """Move a file to another folder (folder_id null = top level) and/or rename it."""
+    f = _file(fid)
+    if "folder_id" in body:
+        folder_id = body["folder_id"] or None
+        if folder_id:
+            _folder(folder_id)
+        db.ex("UPDATE files SET folder_id=? WHERE id=?", (folder_id, fid))
+    if body.get("filename"):
+        name = Path(str(body["filename"]).strip()).name
+        if not allowed(name):
+            raise HTTPException(400, "Keep the file extension (.ufp, .gcode or .gcode.gz)")
+        db.ex("UPDATE files SET filename=? WHERE id=?", (name, fid))
+    return db.file_row(f["id"])
+
+
+# ------------------------------------------------------------------ library folders
+def _folder(fid):
+    f = db.one("SELECT * FROM folders WHERE id=?", (fid,))
+    if not f:
+        raise HTTPException(404, "Folder not found")
+    return f
+
+
+def _folder_name(body):
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "Give the folder a name")
+    if len(name) > 100 or "/" in name:
+        raise HTTPException(400, "Folder names can't contain / or be longer than 100 characters")
+    return name
+
+
+def _check_sibling(name, parent_id, exclude=None):
+    clash = db.one("SELECT id FROM folders WHERE name=? COLLATE NOCASE AND parent_id IS ? AND id IS NOT ?",
+                   (name, parent_id, exclude))
+    if clash:
+        raise HTTPException(409, f"There is already a folder called {name} here")
+
+
+@app.get("/api/folders")
+def list_folders():
+    return db.q("SELECT * FROM folders ORDER BY name COLLATE NOCASE")
+
+
+@app.post("/api/folders")
+def create_folder(body: dict = Body(...)):
+    name, parent_id = _folder_name(body), body.get("parent_id") or None
+    if parent_id:
+        _folder(parent_id)
+    _check_sibling(name, parent_id)
+    fid = db.ex("INSERT INTO folders(name, parent_id, created_at) VALUES(?,?,?)", (name, parent_id, time.time()))
+    return _folder(fid)
+
+
+@app.patch("/api/folders/{fid}")
+def edit_folder(fid: int, body: dict = Body(...)):
+    f = _folder(fid)
+    name = _folder_name(body) if "name" in body else f["name"]
+    parent_id = (body.get("parent_id") or None) if "parent_id" in body else f["parent_id"]
+    walk = parent_id
+    while walk:                                  # can't move a folder inside itself
+        if walk == fid:
+            raise HTTPException(400, "A folder can't be moved inside itself")
+        walk = _folder(walk)["parent_id"]
+    _check_sibling(name, parent_id, exclude=fid)
+    db.ex("UPDATE folders SET name=?, parent_id=? WHERE id=?", (name, parent_id, fid))
+    return _folder(fid)
+
+
+@app.delete("/api/folders/{fid}")
+def delete_folder(fid: int):
+    """Removes the folder only. Its files and sub-folders move up a level, so nothing is lost."""
+    f = _folder(fid)
+    for sub in db.q("SELECT * FROM folders WHERE parent_id=?", (fid,)):
+        name, n = sub["name"], 2
+        while db.one("SELECT id FROM folders WHERE name=? COLLATE NOCASE AND parent_id IS ? AND id!=?",
+                     (name, f["parent_id"], sub["id"])):
+            name, n = f"{sub['name']} ({n})", n + 1
+        db.ex("UPDATE folders SET parent_id=?, name=? WHERE id=?", (f["parent_id"], name, sub["id"]))
+    db.ex("UPDATE files SET folder_id=? WHERE folder_id=?", (f["parent_id"], fid))
+    db.ex("DELETE FROM folders WHERE id=?", (fid,))
+    return {"ok": True}
 
 
 @app.get("/api/files/{fid}/download")
