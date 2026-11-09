@@ -34,6 +34,15 @@ def driver_for(p: dict) -> Driver:
     return d
 
 
+def reset():
+    """Drop all cached printer connections and state, e.g. after restoring a backup."""
+    STATE.clear()
+    _sending.clear()
+    for _, d in list(_drivers.values()):
+        asyncio.get_running_loop().create_task(d.close())
+    _drivers.clear()
+
+
 def forget_printer(pid: int):
     STATE.pop(pid, None)
     cached = _drivers.pop(pid, None)

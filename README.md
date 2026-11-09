@@ -22,6 +22,7 @@ server. It talks to each printer directly, so nothing goes through the cloud.
 | **History** | Every job with its result and a *print again* button, an event log, and each printer's own print history |
 | **Notifications** | A webhook fires when a print finishes, fails or pauses, when a printer needs attention, or when one goes offline. Works with ntfy.sh, Discord, Slack and Home Assistant |
 | **Hot folder** | Files saved into the hot folder are imported automatically, and can be queued automatically too. Sub-folders become Library folders |
+| **Backup & restore** | Download everything (printers, pairing keys, files, folders, history) as one file, and restore it on a new install |
 | **API** | Everything the UI does goes through a JSON API under `/api`, with interactive docs at `/docs` |
 
 ## Supported printers
@@ -78,8 +79,12 @@ to a printer you choose for it. If no printer in your fleet can take a file, the
 5. Click **Deploy**. The service shows *healthy* once it is up. Data is kept in the `lpf-data` volume
    across redeploys.
 
-Prefer the **Dockerfile** build pack? Set *Ports Exposes* to `8800` and add persistent storage mounted at
-`/data`.
+Prefer the **Dockerfile** build pack? Set *Ports Exposes* to `8800`, **and** under *Persistent Storage* add
+a volume mounted at `/data`. Without it, every redeploy starts empty. Local Print Factory shows a red warning
+at the top of every page when `/data` isn't persistent storage.
+
+> **Keep your data safe:** after setting up your printers, use **Settings › Backup › Download backup**. If
+> you ever recreate the app in Coolify (a new resource gets a new, empty volume), use **Restore from backup**.
 
 In Coolify (bridge networking), **Find printers** can't see broadcasts on your LAN, so add printers by IP
 address. Everything else works the same.
@@ -131,8 +136,11 @@ it into the hot folder. Sharing the hot folder over SMB makes this a one-step sa
 | `LPF_PORT` | `8800` | Host port in `docker-compose.yml` |
 | `LF_SDCP_*_PORT` | 3030 / 80 / 3031 / 3000 | Centauri Carbon ports (WS / HTTP / CAM / UDP). Only change these for the simulator |
 
-**Back up the data volume.** It holds everything, including the Ultimaker pairing keys. The health check
-endpoint is `GET /healthz`.
+**Everything lives in the data folder** (`/data` in Docker): the database with your printers and Ultimaker
+pairing keys, library files and folders, queue and history. In Docker it **must** be a volume or bind mount.
+The app warns you if it isn't. **Settings › Backup** downloads all of it as one zip, and **Restore from
+backup** puts it back on a new install. Scripts can use `GET /api/backup` and `POST /api/restore`. The health
+check endpoint is `GET /healthz`.
 
 ### Security
 

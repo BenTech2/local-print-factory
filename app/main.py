@@ -5,15 +5,23 @@ import hashlib
 import hmac
 import json
 import logging
+import os
+import re
+import shutil
+import sqlite3
+import tempfile
 import time
+import zipfile
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
 from . import db, fleet
-from .config import APP_NAME, APP_PASSWORD, FILES_DIR, THUMBS_DIR, VERSION
+from .config import APP_NAME, APP_PASSWORD, DATA_DIR, DATA_PERSISTENT, FILES_DIR, THUMBS_DIR, VERSION
 from .discovery import discover
 from .files import allowed
 from .drivers import DRIVERS, KINDS, PrinterError
@@ -22,12 +30,16 @@ from .drivers.sdcp import WS_PORT as SDCP_WS_PORT, udp_probe
 from .printer_client import UltimakerClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("local-print-factory")
 STATIC = Path(__file__).parent / "static"
 PAIRING: dict[int, dict] = {}
 
 
 @contextlib.asynccontextmanager
 async def lifespan(app):
+    if not DATA_PERSISTENT:
+        log.warning("%s is not a mounted volume: printers, files and history will be LOST when this container "
+                    "is replaced. Mount persistent storage at %s.", DATA_DIR, DATA_DIR)
     task = asyncio.create_task(fleet.run_forever())
     yield
     task.cancel()
@@ -116,7 +128,7 @@ def state():
                 f"WHERE j.status IN ('queued',{','.join('?' * len(db.ACTIVE_STATES))}) "
                 "ORDER BY CASE j.status WHEN 'queued' THEN 1 ELSE 0 END, j.position", db.ACTIVE_STATES)
     return {"version": VERSION, "time": time.time(), "printers": printers, "jobs": jobs,
-            "login": bool(APP_PASSWORD)}
+            "login": bool(APP_PASSWORD), "storage_warning": not DATA_PERSISTENT}
 
 
 @app.get("/api/kinds")
@@ -609,6 +621,91 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 @app.get("/favicon.svg")
 def favicon():
     return FileResponse(STATIC / "favicon.svg")
+
+
+# ------------------------------------------------------------------ backup / restore
+BACKUP_NAME = re.compile(r"^(localfactory\.db|backup\.json|(files|thumbs)/[^/\\]+)$")
+
+
+@app.get("/api/backup")
+def backup():
+    """One zip with the database, uploaded files and thumbnails: everything needed to rebuild this install."""
+    fd, path = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=5) as z:
+        snap = path + ".db"
+        db.snapshot(snap)
+        z.write(snap, "localfactory.db")
+        os.unlink(snap)
+        for d in (FILES_DIR, THUMBS_DIR):
+            for f in sorted(d.iterdir()):
+                if f.is_file():
+                    z.write(f, f"{d.name}/{f.name}")
+        z.writestr("backup.json", json.dumps({"app": "Local Print Factory", "version": VERSION,
+                                              "created": time.time()}))
+    name = f"local-print-factory-backup-{datetime.now():%Y-%m-%d-%H%M}.zip"
+    return FileResponse(path, filename=name, media_type="application/zip",
+                        background=BackgroundTask(os.unlink, path))
+
+
+@app.post("/api/restore")
+async def restore(file: UploadFile = File(...)):
+    """Replace everything with the contents of a backup zip."""
+    fd, path = tempfile.mkstemp(suffix=".zip")
+    with os.fdopen(fd, "wb") as out:
+        while chunk := await file.read(1 << 20):
+            out.write(chunk)
+    try:
+        result = await asyncio.to_thread(_restore, path)
+    finally:
+        os.unlink(path)
+    fleet.reset()
+    return result
+
+
+def _restore(path):
+    try:
+        z = zipfile.ZipFile(path)
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "That isn't a backup file (not a zip)")
+    with z:
+        names = z.namelist()
+        if "localfactory.db" not in names or any(not BACKUP_NAME.match(n) for n in names if not n.endswith("/")):
+            raise HTTPException(400, "That isn't a Local Print Factory backup")
+        if z.testzip() is not None:
+            raise HTTPException(400, "The backup file is damaged")
+        stage = Path(tempfile.mkdtemp(dir=DATA_DIR, prefix=".restore-"))
+        try:
+            for n in names:
+                if n.endswith("/"):
+                    continue
+                dest = stage / n
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with z.open(n) as src, open(dest, "wb") as out:
+                    shutil.copyfileobj(src, out)
+            try:
+                chk = sqlite3.connect(stage / "localfactory.db")
+                ok = chk.execute("PRAGMA integrity_check").fetchone()[0] == "ok" and \
+                    chk.execute("SELECT 1 FROM sqlite_master WHERE name='printers'").fetchone()
+                chk.close()
+            except sqlite3.DatabaseError:
+                ok = False
+            if not ok:
+                raise HTTPException(400, "The database in this backup is damaged")
+            # Everything checked out - swap it in.
+            db.replace_from(stage / "localfactory.db")
+            for d in (FILES_DIR, THUMBS_DIR):
+                new = stage / d.name
+                new.mkdir(exist_ok=True)
+                old = DATA_DIR / f".old-{d.name}"
+                shutil.rmtree(old, ignore_errors=True)
+                d.rename(old)
+                new.rename(d)
+                shutil.rmtree(old, ignore_errors=True)
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+    return {"ok": True, "printers": db.one("SELECT COUNT(*) n FROM printers")["n"],
+            "files": db.one("SELECT COUNT(*) n FROM files")["n"]}
 
 
 @app.get("/healthz", include_in_schema=False)

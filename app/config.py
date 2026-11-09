@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 DATA_DIR = Path(os.environ.get("LF_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))
 FILES_DIR = DATA_DIR / "files"
@@ -19,3 +19,7 @@ APP_NAME = os.environ.get("LF_APP_NAME", "Local Print Factory")
 
 for d in (DATA_DIR, FILES_DIR, THUMBS_DIR, HOTFOLDER_DIR):
     d.mkdir(parents=True, exist_ok=True)
+
+# Inside a container the data folder must be a mounted volume, or everything is lost on the next redeploy.
+IN_CONTAINER = os.environ.get("LF_IN_CONTAINER") == "1" or Path("/.dockerenv").exists()
+DATA_PERSISTENT = not IN_CONTAINER or os.path.ismount(DATA_DIR)

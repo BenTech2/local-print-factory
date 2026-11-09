@@ -321,6 +321,8 @@ dialog::backdrop { background: rgba(10,14,22,.45); backdrop-filter: blur(2px); }
 .file[draggable=true] { cursor: grab; }
 .file[draggable=true] .btn, .file[draggable=true] .iconbtn { cursor: pointer; }
 
+.storagewarn { margin-bottom: 18px; }
+.storagewarn code { font-size: 12px; }
 .offline { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 8px;
   background: var(--bad); color: #fff; padding: 8px 14px; border-radius: 99px; font-weight: 600; font-size: 13px; box-shadow: var(--shadow-lg); }
 

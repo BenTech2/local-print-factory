@@ -71,13 +71,35 @@ MIGRATIONS = [
     ("files", "folder_id", "INTEGER"),       # Library folder; NULL = top level
 ]
 
-with _lock:
-    _conn.executescript(SCHEMA)
-    for table, col, decl in MIGRATIONS:
-        cols = {r[1] for r in _conn.execute(f"PRAGMA table_info({table})")}
-        if col not in cols:
-            _conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
-    _conn.commit()
+def migrate():
+    """Create missing tables and columns. Also run after restoring a backup from an older version."""
+    with _lock:
+        _conn.executescript(SCHEMA)
+        for table, col, decl in MIGRATIONS:
+            cols = {r[1] for r in _conn.execute(f"PRAGMA table_info({table})")}
+            if col not in cols:
+                _conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        _conn.commit()
+
+
+def snapshot(path):
+    """Consistent copy of the live database (safe while the app is running)."""
+    with _lock:
+        dst = sqlite3.connect(path)
+        _conn.backup(dst)
+        dst.close()
+
+
+def replace_from(path):
+    """Overwrite the live database with the one at path (used by restore)."""
+    with _lock:
+        src = sqlite3.connect(path)
+        src.backup(_conn)
+        src.close()
+    migrate()
+
+
+migrate()
 
 # Job states
 QUEUED, SENDING, SENT, PRINTING, PAUSED = "queued", "sending", "sent", "printing", "paused"

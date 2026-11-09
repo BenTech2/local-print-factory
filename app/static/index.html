@@ -74,6 +74,11 @@
   </aside>
 
   <main>
+    <div id="storage-warning" class="callout bad storagewarn" hidden><svg class="i"><use href="#i-alert"/></svg>
+      <div class="txt"><b>Your data is not on persistent storage</b><span class="sub">Printers, files and history will be
+        lost the next time this container is redeployed or replaced. Mount persistent storage at <code>/data</code>
+        (in Coolify: the app's <i>Persistent Storage</i>, or deploy with the Docker Compose build pack), then
+        restore a backup from <b style="display:inline">Settings</b>.</span></div></div>
     <!-- PRINTERS -->
     <section id="tab-printers" class="tab active">
       <header class="pagehead">
@@ -154,6 +159,18 @@
           <button class="btn primary" type="submit">Save changes</button>
         </div>
       </form>
+      <div class="panel settings" style="margin-top:16px">
+        <div class="setrow" style="border-bottom:0">
+          <div class="setlabel"><b>Backup</b><small>Printers and pairing keys, library files and folders, queue, history and settings, in one file.</small></div>
+          <div class="setfield">
+            <div class="btnrow" style="margin:0">
+              <a class="btn" href="/api/backup" id="btn-backup"><svg class="i"><use href="#i-download"/></svg>Download backup</a>
+              <label class="btn"><svg class="i"><use href="#i-upload"/></svg>Restore from backup<input type="file" id="restore-file" accept=".zip,application/zip" hidden></label>
+            </div>
+            <small>Restoring replaces everything currently in Local Print Factory with the backup.</small>
+          </div>
+        </div>
+      </div>
       <div class="about" id="about"></div>
     </section>
   </main>

@@ -680,6 +680,15 @@ $("#settings-form").onsubmit = (e) => {
   act(() => api("/api/settings", { method: "PUT", json: { webhook_url: f.webhook_url.value.trim(), strict_materials: f.strict_materials.checked ? "1" : "0", hotfolder_autoqueue: f.hotfolder_autoqueue.checked ? "1" : "0" } }), "Settings saved");
 };
 $("#btn-test-hook").onclick = () => act(() => api("/api/settings/test-webhook", { method: "POST" }), "Test notification sent");
+$("#restore-file").onchange = async (e) => {
+  const file = e.target.files[0]; e.target.value = "";
+  if (!file) return;
+  if (!await confirmDlg("Restore this backup?", `Everything currently in Local Print Factory (printers, library, queue and history) is replaced with the contents of ${file.name}.`, "Restore backup", true)) return;
+  const fd = new FormData(); fd.append("file", file);
+  toast("Restoring backup…");
+  const r = await act(() => api("/api/restore", { method: "POST", body: fd }));
+  if (r) { toast(`Restored ${r.printers} printer${r.printers === 1 ? "" : "s"} and ${r.files} file${r.files === 1 ? "" : "s"}`); LIB = []; FOLDERS = []; }
+};
 $("#btn-logout").onclick = async () => { await api("/api/logout", { method: "POST" }); location.reload(); };
 
 // ---------------------------------------------------------------- dialogs
@@ -723,6 +732,7 @@ async function refresh() {
     STATE = await api("/api/state");
     $("#conn").classList.remove("down"); $("#conn-text").textContent = "Connected"; $("#offline").hidden = true;
     $("#ver").textContent = "Version " + STATE.version;
+    $("#storage-warning").hidden = !STATE.storage_warning;
     renderPrinters(); renderQueue();
   } catch (e) { $("#conn").classList.add("down"); $("#conn-text").textContent = "Server unreachable"; if (e.message !== "Login required") $("#offline").hidden = false; }
 }
